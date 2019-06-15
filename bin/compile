@@ -1,0 +1,113 @@
+#!/bin/bash
+
+RED="\033[1;31m"
+GREEN="\033[1;32m"
+CYAN="\033[1;36m"
+NOCOLOR="\033[0m"
+
+function cprint() {
+  local color_code=$1
+  local str=$2
+  echo -en "$color_code$str$NOCOLOR"
+}
+
+function cputs() {
+  cprint $1 "$2"; echo
+}
+
+function glob_dir() {
+  # enable **/* pattern globbing
+  shopt -s globstar
+
+  local pattern=$1
+  local glob_result=$(for f in $pattern; do echo $f; done)
+
+  local path
+  while read -r path; do
+    if [ -e "$path" ]; then echo $path; fi
+  done <<< "$glob_result"
+}
+
+function count_lines() {
+  local str=$1
+  if [ "$str" == "" ]; then
+    echo 0
+  else
+    echo "$str" | wc -l
+  fi
+}
+
+function cp_recursive() {
+  local src_path=$1
+  local dst_path=$2
+
+  local dst_dir=$(dirname "$dst_path")
+  if [ "$dst_dir" != "" ]; then
+    mkdir -p "$dst_dir"
+    if [ $? != 0 ]; then return 1; fi
+  fi
+
+  cp -R "$src_path" "$dst_path"
+}
+
+function strip_base_dir() {
+  local full_path=$1
+  local base_dir_path=$2
+
+  echo ${full_path/#$base_dir_path}
+}
+
+function clean_dir() {
+  local path=$1
+  rm -rf $path
+  mkdir -p $path
+}
+
+BUILD_DIR=$1
+
+BUILD_CACHE_MANIFEST_FILE="$BUILD_DIR/.buildcache"
+if [ ! -f $BUILD_CACHE_MANIFEST_FILE ]; then
+  cputs $CYAN "[Build Cache Persister] Manifest file \".buildcache\" not found, skipping."
+  exit
+fi
+BUILD_CACHE_STORE_PATH_FILE="$BUILD_DIR/.herokubuildcachestorepath"
+if [ ! -f $BUILD_CACHE_STORE_PATH_FILE ]; then
+  cputs $RED "[Build Cache Persister] Unable to persist build cache, file \".herokubuildcachestorepath\" not found."
+  cputs $RED "Buildpack \"heroku-build-cache-loader\" must be prepend before \"heroku-build-cache-persister\"!"
+  exit
+fi
+STORE_DIR=$(cat $BUILD_CACHE_STORE_PATH_FILE)
+
+rm $BUILD_CACHE_STORE_PATH_FILE
+clean_dir $STORE_DIR
+
+while read pattern; do
+  # ignoring empty lines or lines starting with # which are comments
+  [[ "$pattern" =~ ^(\#.*)?$ ]] && continue
+
+  fullpattern="$BUILD_DIR/$pattern"
+
+  files=$(glob_dir "$fullpattern")
+  num_files_found=$(count_lines "$files")
+
+  cputs $CYAN "[Build Cache Persister] Pattern \"$pattern\" matched $num_files_found file/dir(s)"
+
+  while read -r matched_path; do
+    if [ "$matched_path" == "" ]; then continue; fi
+
+    rel_path=$(strip_base_dir "$matched_path" "$BUILD_DIR/")
+    cp_src_path="$matched_path"
+    cp_dst_path="$STORE_DIR/$rel_path"
+
+    cprint $NOCOLOR "[Build Cache Persister]   cache push: $rel_path ..."
+
+    cp_recursive "$cp_src_path" "$cp_dst_path"
+
+    if [ $? ]; then
+      cputs $GREEN " successful"
+    else
+      cputs $RED " failed"
+    fi
+  done <<< $files
+
+done < $BUILD_CACHE_MANIFEST_FILE

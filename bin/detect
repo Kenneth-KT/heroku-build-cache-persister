@@ -1,0 +1,8 @@
+#!/bin/bash
+
+BUILD_DIR=$1
+BUILD_CACHE_MANIFEST_FILE="$BUILD_DIR/.buildcache"
+
+if [ -f $BUILD_CACHE_MANIFEST_FILE ]; then
+  echo "Heroku Build Cache Persister"
+fi
